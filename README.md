@@ -14,7 +14,7 @@ Bull Analyst   Bear Analyst
 └───────┬───────┘
         ▼
  Portfolio Manager
-     (GPT-4o)
+   (Cloud Judge)
         │
         ▼
  Structured Verdict
@@ -28,7 +28,7 @@ Bull and Bear agents run in parallel with zero-knowledge isolation — they neve
 **Requirements**
 - Python 3.11+
 - [Ollama](https://ollama.com) running locally with `qwen3.5:4b` pulled
-- OpenAI API key
+- OpenAI API key (for the cloud judge)
 
 ```bash
 ollama pull qwen3.5:4b

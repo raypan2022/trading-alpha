@@ -6,7 +6,7 @@ from state import AgentState, TradingVerdict
 from tools import fetch_all_tool_data
 
 LOCAL_MODEL = "qwen3.5:4b"
-CLOUD_MODEL = "gpt-4o"
+CLOUD_MODEL = "gpt-5.4-mini"
 
 
 def bull_node(state: AgentState) -> dict:
