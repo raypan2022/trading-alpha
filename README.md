@@ -32,8 +32,12 @@ Bull and Bear agents run in parallel with zero-knowledge isolation — they neve
 
 ```bash
 ollama pull qwen3.5:4b
-pip install langgraph langchain-openai langchain-ollama langchain-core yfinance pydantic
-export OPENAI_API_KEY=your_key_here
+pip install langgraph langchain-openai langchain-ollama langchain-core yfinance pydantic python-dotenv
+```
+
+Add your key to `.env`:
+```
+OPENAI_API_KEY=your_key_here
 ```
 
 ## Usage

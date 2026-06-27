@@ -9,7 +9,11 @@ Requires:
     - OPENAI_API_KEY environment variable set
 """
 import os
+import sys
+from dotenv import load_dotenv
 from graph import build_graph
+
+load_dotenv()
 
 
 def main():
@@ -17,7 +21,11 @@ def main():
         print("ERROR: OPENAI_API_KEY environment variable is not set.")
         return
 
-    ticker = input("Enter ticker symbol: ").strip().upper()
+    if len(sys.argv) > 1:
+        ticker = sys.argv[1].strip().upper()
+    else:
+        ticker = input("Enter ticker symbol: ").strip().upper()
+
     if not ticker:
         print("Ticker cannot be empty.")
         return

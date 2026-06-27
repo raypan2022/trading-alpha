@@ -6,6 +6,25 @@ TRUSTED_SOURCES = {
     "Financial Times", "CNBC", "MarketWatch", "Barron's", "AP News",
 }
 
+# Words too generic to use as company name signals
+_STOP_WORDS = {"inc", "corp", "ltd", "llc", "co", "the", "and", "group", "holdings", "company"}
+
+
+def _is_relevant(title: str, summary: str, ticker: str, company_name: str) -> bool:
+    """Returns True if the article is actually about this ticker or company."""
+    text = (title + " " + summary).lower()
+
+    if ticker.lower() in text:
+        return True
+
+    # Match any meaningful word from the company name (e.g. "Reddit" from "Reddit Inc.")
+    for word in company_name.lower().split():
+        word = word.strip(".,")
+        if len(word) > 3 and word not in _STOP_WORDS and word in text:
+            return True
+
+    return False
+
 
 def get_price_snapshot(ticker: str) -> str:
     try:
@@ -44,7 +63,10 @@ def _similar(a: str, b: str, threshold: float = 0.8) -> bool:
 
 def get_recent_news(ticker: str, max_articles: int = 5) -> str:
     try:
-        raw_news = yf.Ticker(ticker).news or []
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        company_name = info.get("shortName") or info.get("longName") or ticker
+        raw_news = stock.news or []
 
         filtered = []
         seen_titles: list[str] = []
@@ -63,6 +85,9 @@ def get_recent_news(ticker: str, max_articles: int = 5) -> str:
                 summary = article.get("summary", "No summary available.")
 
             if not any(trusted.lower() in publisher.lower() for trusted in TRUSTED_SOURCES):
+                continue
+
+            if not _is_relevant(title, summary, ticker, company_name):
                 continue
 
             if any(_similar(title, seen) for seen in seen_titles):

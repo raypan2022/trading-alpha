@@ -10,14 +10,12 @@ def build_graph():
     workflow.add_node("bear_researcher", bear_node)
     workflow.add_node("portfolio_manager", judge_node)
 
-    # Fan out from START — bull and bear run in parallel
+    # Sequential: bull → bear → judge
+    # Keeps terminal output clean and readable during streaming.
+    # Parallel execution is a v2 upgrade once output buffering is in place.
     workflow.add_edge(START, "bull_researcher")
-    workflow.add_edge(START, "bear_researcher")
-
-    # Both converge at the judge (LangGraph waits for both before proceeding)
-    workflow.add_edge("bull_researcher", "portfolio_manager")
+    workflow.add_edge("bull_researcher", "bear_researcher")
     workflow.add_edge("bear_researcher", "portfolio_manager")
-
     workflow.add_edge("portfolio_manager", END)
 
     return workflow.compile()
