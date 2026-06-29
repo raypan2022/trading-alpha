@@ -53,6 +53,21 @@ PERSHARE_CONCEPTS = {
     "EPS (Diluted)": ["EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted"],
 }
 
+# Metrics whose multi-year ANNUAL trend the debaters can look up to ground a
+# claim (e.g. "capex is surging" / "margins are compressing") in real numbers.
+HISTORY_CONCEPTS = {
+    "revenue": (FLOW_CONCEPTS["Revenue"], "money"),
+    "net_income": (["NetIncomeLoss"], "money"),
+    "operating_income": (["OperatingIncomeLoss"], "money"),
+    "operating_cash_flow": (FLOW_CONCEPTS["Operating Cash Flow"], "money"),
+    "capex": (["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"], "money"),
+}
+RATIO_HISTORY = {
+    "net_margin": (["NetIncomeLoss"], FLOW_CONCEPTS["Revenue"]),
+    "operating_margin": (["OperatingIncomeLoss"], FLOW_CONCEPTS["Revenue"]),
+}
+HISTORY_METRICS = list(HISTORY_CONCEPTS) + list(RATIO_HISTORY)
+
 
 def _get_cik(ticker: str) -> str | None:
     """Resolve a ticker to its zero-padded 10-digit CIK."""
@@ -218,7 +233,87 @@ def get_diluted_eps(ticker: str, as_of: str | None = None) -> float | None:
     return None
 
 
+def _annual_series(usgaap: dict, candidates: list, as_of: str | None = None) -> dict:
+    """Return {fiscal_year: point} of annual (10-K) values for the first matching concept."""
+    for concept in candidates:
+        node = usgaap.get(concept)
+        if not node:
+            continue
+        for points in node.get("units", {}).values():
+            pts = [p for p in points if p.get("form") == "10-K"]
+            if as_of:
+                pts = [p for p in pts if p.get("filed", "") <= as_of]
+            if not pts:
+                continue
+            by_fy = {}
+            for p in pts:
+                fy = p.get("fy")
+                if fy is None:
+                    continue
+                # keep the latest-ending entry per fiscal year (full-year figure)
+                if fy not in by_fy or p.get("end", "") > by_fy[fy].get("end", ""):
+                    by_fy[fy] = p
+            if by_fy:
+                return by_fy
+    return {}
+
+
+def get_metric_history(ticker: str, metric: str, as_of: str | None = None, periods: int = 5) -> str:
+    """Return the multi-year annual trend of a single metric, point-in-time aware."""
+    try:
+        cik = _get_cik(ticker)
+        if not cik:
+            return f"ERROR: No SEC CIK found for '{ticker}'."
+        usgaap = _fetch_facts(cik).get("facts", {}).get("us-gaap", {})
+        metric = metric.lower().strip()
+
+        if metric in HISTORY_CONCEPTS:
+            candidates, fmt = HISTORY_CONCEPTS[metric]
+            series = _annual_series(usgaap, candidates, as_of)
+            if not series:
+                return f"ERROR: no annual history for '{metric}' on {ticker}."
+            fys = sorted(series)[-periods:]
+            rows = [(fy, _human(series[fy].get("val")) if fmt == "money" else series[fy].get("val")) for fy in fys]
+            first_v, last_v = series[fys[0]].get("val"), series[fys[-1]].get("val")
+
+        elif metric in RATIO_HISTORY:
+            num_c, den_c = RATIO_HISTORY[metric]
+            num, den = _annual_series(usgaap, num_c, as_of), _annual_series(usgaap, den_c, as_of)
+            fys = sorted(set(num) & set(den))[-periods:]
+            if not fys:
+                return f"ERROR: no annual history for '{metric}' on {ticker}."
+            vals = {}
+            rows = []
+            for fy in fys:
+                d = den[fy].get("val")
+                v = (num[fy].get("val") / d * 100) if d else None
+                vals[fy] = v
+                rows.append((fy, f"{v:.1f}%" if v is not None else "N/A"))
+            first_v, last_v = vals[fys[0]], vals[fys[-1]]
+
+        else:
+            return f"ERROR: unknown metric '{metric}'. Available: {', '.join(HISTORY_METRICS)}."
+
+        trend = "flat"
+        if first_v and last_v:
+            if last_v > first_v * 1.05:
+                trend = "rising"
+            elif last_v < first_v * 0.95:
+                trend = "falling"
+
+        lines = [f"METRIC HISTORY — {ticker.upper()} {metric} (annual, last {len(rows)} FYs)"]
+        lines += [f"  FY{fy}: {disp}" for fy, disp in rows]
+        lines.append(f"  Trend: {trend}")
+        return "\n".join(lines)
+
+    except requests.RequestException as e:
+        return f"ERROR: SEC request failed ({e})."
+    except Exception as e:
+        return f"ERROR: metric history failed ({e})."
+
+
 if __name__ == "__main__":
     import sys
     t = sys.argv[1] if len(sys.argv) > 1 else "AAPL"
-    print(get_sec_fundamentals(t))
+    m = sys.argv[2] if len(sys.argv) > 2 else None
+    print(get_metric_history(t, m) if m else get_sec_fundamentals(t))

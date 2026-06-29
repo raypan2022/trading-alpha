@@ -15,8 +15,9 @@ from datetime import date, timedelta
 import yfinance as yf
 
 from sources import cache
-from sources.sec import get_sec_fundamentals, get_diluted_eps
+from sources.sec import get_sec_fundamentals, get_diluted_eps, get_metric_history as _sec_metric_history
 from sources.finnhub import get_finnhub_news
+from sources.websearch import web_search as _web_search
 
 
 def price_on(ticker: str, on_date: str):
@@ -93,3 +94,13 @@ def get_fundamentals(ticker: str, as_of: str | None = None) -> str:
 def get_recent_news(ticker: str, as_of: str | None = None) -> str:
     """Recent symbol-scoped news from Finnhub."""
     return get_finnhub_news(ticker, as_of=as_of)
+
+
+def get_metric_history(ticker: str, metric: str, as_of: str | None = None) -> str:
+    """Multi-year annual trend of a single SEC metric (point-in-time aware)."""
+    return _sec_metric_history(ticker, metric, as_of=as_of)
+
+
+def get_web_search(query: str, as_of: str | None = None) -> str:
+    """Open-ended free web search (live only; refuses in backtest to avoid lookahead)."""
+    return _web_search(query, as_of=as_of)

@@ -11,6 +11,7 @@ runs this is enough to avoid re-hitting SEC on every call.
 import os
 import json
 import time
+import hashlib
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", ".cache")
 
@@ -30,6 +31,11 @@ def ttl_for(as_of) -> int:
 
 def _path(key: str) -> str:
     safe = "".join(c if c.isalnum() else "_" for c in key)
+    # Filesystems cap filenames at ~255 bytes; long keys (e.g. search queries)
+    # get truncated with a hash suffix to stay unique and within the limit.
+    if len(safe) > 100:
+        digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+        safe = f"{safe[:80]}_{digest}"
     return os.path.join(CACHE_DIR, f"{safe}.json")
 
 

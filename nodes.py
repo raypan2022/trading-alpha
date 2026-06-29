@@ -6,8 +6,11 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from state import AgentState, TradingVerdict
-from tools import get_price_snapshot, get_fundamentals, get_recent_news
+from tools import (
+    get_price_snapshot, get_fundamentals, get_recent_news, get_metric_history, get_web_search,
+)
 from sources.market import get_market_regime
+from sources.sec import HISTORY_METRICS
 
 LOCAL_MODEL = "qwen3.5:9b"
 CLOUD_MODEL = "gpt-5.4-mini"
@@ -68,17 +71,18 @@ def _stream_response(messages: list, label: str, color: str, stop_on_tool_call: 
         if token:
             print(token, end="", flush=True)
             content += token
-            # Once the tool name is fully written (followed by any non-word char),
-            # cut the stream so the model can't fabricate the result.
-            if stop_on_tool_call and re.search(r"CALL_TOOL:\s*\w+\W", content):
+            # Once a tool/lookup/search directive is fully written, cut the
+            # stream so the model can't fabricate the result. SEARCH takes a
+            # free-text query, so it terminates on the line's newline.
+            if stop_on_tool_call and re.search(r"(?:CALL_TOOL|LOOKUP):\s*\w+\W|SEARCH:.*\n", content):
                 break
     print()
     return content.strip()
 
 
 def _strip_tool_calls(text: str) -> str:
-    """Remove any stray CALL_TOOL lines so a thesis never ends as a tool stub."""
-    return re.sub(r"^.*CALL_TOOL:\s*\w+.*$", "", text, flags=re.MULTILINE).strip()
+    """Remove any stray directive lines so output never ends as a stub."""
+    return re.sub(r"^.*(?:CALL_TOOL|LOOKUP|SEARCH):.*$", "", text, flags=re.MULTILINE).strip()
 
 
 def _parse_tool_call(text: str) -> str | None:
@@ -234,24 +238,47 @@ def _too_similar(a: str, b: str) -> bool:
 def _debate_turn(role: str, state: AgentState, opponent_claim: str,
                  own_prior_points: list, color: str) -> str:
     """
-    One rebuttal. Deliberately NOT given the full transcript dump — only the
-    single opponent argument to rebut and a list of its own prior points. This
-    keeps a weak model from absorbing/echoing the opponent's text (the cause of
-    the verbatim-copy bug), and the identity anchor is placed LAST for recency.
+    One rebuttal. The analyst may first issue ONE metric-history lookup to ground
+    its rebuttal in real SEC numbers (rather than fabricating them), then writes
+    the rebuttal. Deliberately NOT given the full transcript dump — only the
+    single opponent argument to rebut and its own prior points — so a weak model
+    can't absorb/echo the opponent's text. Identity anchor is placed LAST.
     """
     ticker = state["ticker"]
+    as_of = state.get("as_of")
+    is_live = as_of is None
     opp_name = "bear" if role == "bull" else "bull"
     stance = "bullish" if role == "bull" else "bearish"
     already = "\n".join(f"- {p}" for p in own_prior_points)
+    label = f"{role.upper()} REBUTTAL"
+
+    # SEARCH is only offered live — it can't be point-in-time, so it's omitted
+    # from the menu in backtests (and refused by the tool if used anyway).
+    ground_menu = (
+        f"- Financial trends (margins, capex, growth, cash flow) — look up real multi-year history:\n"
+        f"  LOOKUP: <metric>   (available: {', '.join(HISTORY_METRICS)})\n"
+    )
+    if is_live:
+        ground_menu += (
+            f"- Qualitative/recent context (sentiment, events, analyst views) — search the web:\n"
+            f"  SEARCH: <short neutral query, max 12 words, keywords only>   (NOT a sentence or your argument)\n"
+        )
+    ground_menu += (
+        f"Prefer LOOKUP for any numeric/financial claim (it returns exact figures). "
+        f"Output the directive on its OWN line and STOP — do not write your rebuttal yet.\n"
+    )
 
     system = {
         "role": "system",
         "content": (
             f"You are the {role.title()} Analyst for {ticker}. You hold a strictly {stance} stance and must "
-            f"NEVER switch sides or argue the {opp_name}'s position. Your only job is to REBUT the {opp_name}'s "
-            f"latest argument using specific numbers. Raise a NEW angle each time — never restate a point you "
-            f"have already made. Be sharp and brief (max 150 words). "
-            f"If you genuinely have no new rebuttal, reply with ONLY: {NO_REBUTTAL}"
+            f"NEVER switch sides or argue the {opp_name}'s position. Rebut the {opp_name}'s latest argument with "
+            f"specifics, raising a NEW angle (never restate a prior point).\n"
+            f"GROUND YOUR CLAIMS — do not invent figures. To look something up, output exactly ONE directive "
+            f"line and nothing else:\n{ground_menu}"
+            f"ANTI-BIAS RULE: when you cite looked-up data, you MUST first name the single fact that most "
+            f"WEAKENS your own {stance} case, then explain why your stance still holds despite it.\n"
+            f"Max 150 words. If you genuinely have no new rebuttal, reply with ONLY: {NO_REBUTTAL}"
         ),
     }
     user = {
@@ -260,11 +287,46 @@ def _debate_turn(role: str, state: AgentState, opponent_claim: str,
             f"MARKET REGIME:\n{state.get('market_regime', 'N/A')}\n\n"
             f"POINTS YOU HAVE ALREADY MADE (do NOT repeat any of these):\n{already}\n\n"
             f"THE {opp_name.upper()}'S LATEST ARGUMENT — this is what you must rebut:\n\"\"\"\n{opponent_claim}\n\"\"\"\n\n"
-            f"You are the {role.upper()}. Stay {stance}. Write a NEW, specific rebuttal to the {opp_name}'s "
-            f"argument above — do not adopt their position. Begin your rebuttal:"
+            f"You are the {role.upper()}. Stay {stance}. Either output one lookup/search line, or write your rebuttal now:"
         ),
     }
-    return _stream_response([system, user], f"{role.upper()} REBUTTAL", color, stop_on_tool_call=False)
+
+    first = _stream_response([system, user], label, color)
+
+    data, src = None, None
+    m_lookup = re.search(r"LOOKUP:\s*(\w+)", first)
+    m_search = re.search(r"SEARCH:\s*(.+)", first)
+    if m_lookup and m_lookup.group(1).lower() in HISTORY_METRICS:
+        metric = m_lookup.group(1).lower()
+        print(f"{GRAY}  ↳ Grounding lookup: {BOLD}{metric} history{RESET}")
+        data, src = get_metric_history(ticker, metric, as_of=as_of), f"{metric} history"
+    elif m_search:
+        # The model sometimes crams a whole paragraph in; keep only a real query
+        # (first line, first ~12 words) so it's a usable search, not an essay.
+        query = m_search.group(1).strip().strip('"').split("\n")[0]
+        query = " ".join(query.split()[:12])
+        print(f"{GRAY}  ↳ Web search: {BOLD}{query}{RESET}")
+        data, src = get_web_search(query, as_of=as_of), f"web search: {query}"
+
+    if data is None:
+        return _strip_tool_calls(first)
+
+    print(f"{GRAY}{data}{RESET}")
+    print(f"{GRAY}{'─' * 40}{RESET}")
+    followup = {
+        "role": "user",
+        "content": (
+            f"DATA — {src}:\n{data}\n\n"
+            f"Now write your grounded rebuttal citing this. Apply the anti-bias rule: first name the fact here "
+            f"that most weakens your side, then argue why your {stance} case still holds. "
+            f"You are the {role.upper()}. Begin:"
+        ),
+    }
+    grounded = _stream_response(
+        [system, user, {"role": "assistant", "content": first}, followup],
+        label, color, stop_on_tool_call=False,
+    )
+    return _strip_tool_calls(grounded)
 
 
 def debate_node(state: AgentState) -> dict:
@@ -329,7 +391,10 @@ def judge_node(state: AgentState) -> dict:
             "You are the Head Portfolio Manager running a non-cooperative trading committee. "
             "You receive two adversarial briefs — one hyper-bull, one hyper-bear — on the same asset. "
             "Cross-examine their data points, identify logical leaps, weigh the evidence, "
-            "and deliver a definitive verdict. Populate every field of the output schema precisely."
+            "and deliver a definitive verdict. Populate every field of the output schema precisely.\n"
+            "Be skeptical of cherry-picking: if a claim rests on a single convenient data point while "
+            "ignoring the broader trend, discount it. Give more weight to points backed by multi-year data "
+            "than to asserted figures with no source."
         )),
         HumanMessage(content=(
             f"ASSET: {state['ticker']}\n\n"

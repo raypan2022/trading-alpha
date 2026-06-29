@@ -48,7 +48,7 @@ The **cloud judge** then weighs which points survived rebuttal — against the m
 
 ```bash
 ollama pull qwen3.5:9b
-pip install langgraph langchain-openai langchain-ollama langchain-core yfinance pydantic python-dotenv
+pip install langgraph langchain-openai langchain-ollama langchain-core yfinance pydantic python-dotenv ddgs
 ```
 
 Add your key to `.env`:
@@ -88,6 +88,15 @@ Each agent autonomously decides which tools to call (up to a bounded budget) bef
 | `get_recent_news` | Finnhub | Symbol-scoped recent headlines, headline-relevance filtered and deduplicated |
 
 The Macro Strategist additionally reads a **market-regime** signal (`sources/market.py`) — S&P 500 / Nasdaq trend vs moving averages, VIX level, and 10Y yield direction, all from yfinance index history. Unlike the three tools above, this isn't agent-selected: it's computed once and injected as shared context for everyone.
+
+**Mid-debate grounding tools.** During the debate, an analyst can look something up to ground a rebuttal in real data instead of inventing figures:
+
+| Directive | Source | Backtest-safe? |
+|---|---|---|
+| `LOOKUP: <metric>` | SEC multi-year annual trend (revenue, margins, capex, cash flow…) | ✅ point-in-time |
+| `SEARCH: <question>` | Free DuckDuckGo web search (sentiment, recent events, analyst views) | ❌ live only — refused in backtest to avoid lookahead |
+
+Both ship with confirmation-bias guardrails: searches must be phrased as neutral factual questions, the analyst must name the strongest fact that *weakens* its own side before arguing past it, and the judge discounts claims that rest on a single cherry-picked data point.
 
 Cold data (SEC filings) is cached to disk with a 24h TTL; the ticker→CIK map and company names are cached longer. Fundamentals are filtered to core statement lines before reaching the model — the raw XBRL blob is never injected.
 
