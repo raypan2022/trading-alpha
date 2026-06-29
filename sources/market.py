@@ -17,6 +17,8 @@ from datetime import date, timedelta
 
 import yfinance as yf
 
+from . import cache
+
 
 def _closes(ticker: str, as_of: str | None):
     tk = yf.Ticker(ticker)
@@ -118,6 +120,11 @@ def _ten_year(as_of: str | None) -> str:
 
 def get_market_regime(as_of: str | None = None) -> str:
     """Public tool: a compact, point-in-time read of the overall market regime."""
+    ck = f"regime_{as_of or 'live'}"
+    hit = cache.get(ck, cache.ttl_for(as_of))
+    if hit is not None:
+        return hit
+
     when = as_of if as_of else "today"
 
     sp_line, sp_dir = _index_line("S&P 500", "^GSPC", as_of)
@@ -133,7 +140,7 @@ def get_market_regime(as_of: str | None = None) -> str:
     else:
         overall = "NEUTRAL / MIXED"
 
-    return (
+    result = (
         f"MARKET REGIME (as of {when})\n"
         f"  Overall:    {overall}\n"
         f"{sp_line}\n"
@@ -141,6 +148,8 @@ def get_market_regime(as_of: str | None = None) -> str:
         f"{vix_line}\n"
         f"{tnx_line}"
     )
+    cache.set(ck, result)
+    return result
 
 
 if __name__ == "__main__":

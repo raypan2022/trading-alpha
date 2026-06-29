@@ -74,6 +74,11 @@ def get_finnhub_news(ticker: str, days: int = 7, max_articles: int = 5,
     if not api_key:
         return "ERROR: FINNHUB_API_KEY not set. Add a free key from finnhub.io to .env."
 
+    ck = f"news_{ticker.upper()}_{as_of or 'live'}"
+    hit = cache.get(ck, cache.ttl_for(as_of))
+    if hit is not None:
+        return hit
+
     try:
         company_name = _get_company_name(ticker, api_key)
         # as_of (ISO date): for backtesting, end the news window at that date so
@@ -94,6 +99,7 @@ def get_finnhub_news(ticker: str, days: int = 7, max_articles: int = 5,
         articles = resp.json()
 
         if not isinstance(articles, list) or not articles:
+            cache.set(ck, "No recent news found.")
             return "No recent news found."
 
         articles.sort(key=lambda a: a.get("datetime", 0), reverse=True)
@@ -118,7 +124,9 @@ def get_finnhub_news(ticker: str, days: int = 7, max_articles: int = 5,
             if len(out) >= max_articles:
                 break
 
-        return "\n---\n".join(out) if out else "No recent news found."
+        result = "\n---\n".join(out) if out else "No recent news found."
+        cache.set(ck, result)
+        return result
 
     except requests.RequestException as e:
         return f"ERROR: Finnhub news request failed ({e}). Proceed with existing context."

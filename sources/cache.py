@@ -14,6 +14,19 @@ import time
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", ".cache")
 
+# Short TTL for live data — long enough to dedupe duplicate tool calls within a
+# single committee run (bull + bear both fetch the same news/price), short
+# enough that back-to-back live runs aren't stale.
+LIVE_TTL = 900                       # 15 minutes
+# Point-in-time (as_of) data is immutable — a past date's price/news never
+# changes — so it can be cached effectively forever.
+BACKTEST_TTL = 30 * 24 * 3600        # 30 days
+
+
+def ttl_for(as_of) -> int:
+    """Pick a TTL based on whether the data is point-in-time (immutable) or live."""
+    return BACKTEST_TTL if as_of else LIVE_TTL
+
 
 def _path(key: str) -> str:
     safe = "".join(c if c.isalnum() else "_" for c in key)

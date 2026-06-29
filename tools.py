@@ -14,6 +14,7 @@ from datetime import date, timedelta
 
 import yfinance as yf
 
+from sources import cache
 from sources.sec import get_sec_fundamentals, get_diluted_eps
 from sources.finnhub import get_finnhub_news
 
@@ -32,6 +33,10 @@ def price_on(ticker: str, on_date: str):
 
 
 def get_price_snapshot(ticker: str, as_of: str | None = None) -> str:
+    ck = f"price_{ticker.upper()}_{as_of or 'live'}"
+    hit = cache.get(ck, cache.ttl_for(as_of))
+    if hit is not None:
+        return hit
     try:
         eps = get_diluted_eps(ticker, as_of=as_of)
 
@@ -65,7 +70,7 @@ def get_price_snapshot(ticker: str, as_of: str | None = None) -> str:
             pe_line = f"P/E (price/SEC EPS): {price / eps:.1f}"
 
         price_str = f"{price:.2f}" if isinstance(price, float) else price
-        return (
+        result = (
             f"Current Price:  {price_str}\n"
             f"52-Week High:   {high52}\n"
             f"52-Week Low:    {low52}\n"
@@ -74,6 +79,8 @@ def get_price_snapshot(ticker: str, as_of: str | None = None) -> str:
             f"Beta:           {beta}\n"
             f"{pe_line}"
         )
+        cache.set(ck, result)
+        return result
     except Exception as e:
         return f"ERROR: {e}"
 
