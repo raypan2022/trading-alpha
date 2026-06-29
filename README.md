@@ -61,12 +61,37 @@ Enter any valid ticker (e.g. `AAPL`, `NVDA`, `TSLA`) and the committee will conv
   Rationale:        ...
 ```
 
-## Tools (v1)
+## Tools
 
-All market data is sourced from `yfinance` with no API key required. News is filtered to trusted outlets only (Reuters, Bloomberg, WSJ, CNBC, FT, etc.) and deduplicated before reaching the agents.
+Each agent autonomously decides which tools to call (up to a bounded budget) before writing its thesis. Data providers live in `sources/`.
 
-| Tool | Data |
-|---|---|
-| `get_price_snapshot` | Current price, 52-week range, market cap, beta |
-| `get_fundamentals` | PE, margins, debt/equity, revenue growth, EPS, ROE |
-| `get_recent_news` | Last 5 headlines from trusted sources |
+| Tool | Source | Data |
+|---|---|---|
+| `get_price_snapshot` | yfinance | Current price, 52-week range, market cap, beta, and P/E computed from SEC EPS |
+| `get_fundamentals` | SEC EDGAR | Authoritative XBRL filing data: revenue, net income, cash flow, assets, equity, EPS, plus derived net margin / ROE / debt-to-assets |
+| `get_recent_news` | Finnhub | Symbol-scoped recent headlines, headline-relevance filtered and deduplicated |
+
+Cold data (SEC filings) is cached to disk with a 24h TTL; the ticker→CIK map and company names are cached longer. Fundamentals are filtered to core statement lines before reaching the model — the raw XBRL blob is never injected.
+
+## Evaluation
+
+The agent is measured, not vibe-checked. The harness in `evals/` provides two kinds of signal:
+
+**Immediate robustness** (no market outcome needed) — runs the committee over a basket of tickers and verifies every run produces a complete, schema-valid verdict with non-empty bull *and* bear theses. This catches regressions (e.g. an agent ending on an empty report) across a whole basket automatically.
+
+```bash
+python -m evals.run_eval              # full basket
+python -m evals.run_eval AAPL RDDT    # ad-hoc subset
+```
+
+**Deferred outcome scoring** — each verdict is logged with its entry price and timestamp, then scored against the stock's actual move once the 30-day horizon elapses:
+
+- **Directional accuracy** — did BUY/SELL/HOLD match the realized move (with a ±2% flat band for HOLD)?
+- **Target-price error** — MAPE of the 30-day target vs. the realized price.
+- **Confidence calibration** — do high-confidence calls actually hit more often than low-confidence ones? A model that knows *when* it's right is more useful than one with flat confidence.
+
+```bash
+python -m evals.score_eval            # scores any matured verdicts
+```
+
+Scoring uses forward price data only (no lookahead), so results accumulate honestly over time. Logged verdicts live in `evals/results.jsonl`.
