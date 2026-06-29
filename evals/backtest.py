@@ -33,15 +33,36 @@ load_dotenv()
 
 HORIZON_DAYS = 30
 
-# (ticker, as_of) — EDIT these to dates after your local model's knowledge
-# cutoff and at least HORIZON_DAYS before today.
-DEFAULT_CASES = [
-    ("AAPL", "2026-04-15"),
-    ("NVDA", "2026-04-15"),
-    ("MSFT", "2026-05-01"),
-    ("RDDT", "2026-05-01"),
-    ("TSLA", "2026-04-22"),
-]
+# Assumed knowledge cutoff of the local model (qwen3.5). Backtest dates must be
+# AFTER this, or the model may already remember how the stock moved.
+MODEL_KNOWLEDGE_CUTOFF = "2026-01-31"
+
+# The backtest grid: every ticker evaluated at every date (cross product). This
+# gives one consistent, principled set instead of arbitrary per-ticker dates.
+# Each date must be after MODEL_KNOWLEDGE_CUTOFF and at least HORIZON_DAYS before
+# today (so the realized move exists) — invalid dates are skipped with a notice.
+TICKERS = ["AAPL", "NVDA", "RDDT"]
+AS_OF_DATES = ["2026-03-16", "2026-04-15"]
+
+
+def _valid_date(as_of: str, today: date) -> tuple[bool, str]:
+    if as_of <= MODEL_KNOWLEDGE_CUTOFF:
+        return False, f"on/before model cutoff {MODEL_KNOWLEDGE_CUTOFF}"
+    if date.fromisoformat(as_of) + timedelta(days=HORIZON_DAYS) > today:
+        return False, f"{HORIZON_DAYS}d horizon hasn't elapsed yet"
+    return True, ""
+
+
+def _build_cases() -> list:
+    today = date.today()
+    cases = []
+    for as_of in AS_OF_DATES:
+        ok, why = _valid_date(as_of, today)
+        if not ok:
+            print(f"  Skipping {as_of}: {why}.")
+            continue
+        cases.extend((t, as_of) for t in TICKERS)
+    return cases
 
 
 def _run_case(app, ticker: str, as_of: str):
@@ -59,7 +80,7 @@ def main():
     if len(sys.argv) == 3:
         cases = [(sys.argv[1].upper(), sys.argv[2])]
     else:
-        cases = DEFAULT_CASES
+        cases = _build_cases()
 
     app = build_graph()
     scored = []

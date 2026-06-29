@@ -105,4 +105,6 @@ python -m evals.backtest AAPL 2026-04-15   # single ad-hoc case
 
 Two lookahead traps it avoids:
 - **Data leakage** — an `as_of` date is threaded through every tool, so the agent never sees a price, filing, or headline from after the decision date.
-- **Model-memory leakage** — the *local model* may already "remember" a stock's move if the date predates its training cutoff. Backtest dates must be **after the local model's knowledge cutoff** (and ≥30 days before today so the outcome exists). Set them in `DEFAULT_CASES`.
+- **Model-memory leakage** — the *local model* may already "remember" a stock's move if the date predates its training cutoff. Backtest dates must be **after the local model's knowledge cutoff** (and ≥30 days before today so the outcome exists).
+
+The grid is a list of `TICKERS` × a list of `AS_OF_DATES` (cross product), guarded by a `MODEL_KNOWLEDGE_CUTOFF` constant — any date on/before the cutoff or without an elapsed horizon is skipped automatically.
