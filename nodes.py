@@ -1,4 +1,6 @@
 import re
+from difflib import SequenceMatcher
+
 import ollama
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -10,8 +12,9 @@ from sources.market import get_market_regime
 LOCAL_MODEL = "qwen3.5:9b"
 CLOUD_MODEL = "gpt-5.4-mini"
 MAX_TOOL_CALLS = 3
-MAX_DEBATE_ROUNDS = 2          # hard cap on bull<->bear rebuttal rounds
+MAX_DEBATE_ROUNDS = 3          # hard cap on bull<->bear rebuttal rounds
 NO_REBUTTAL = "NO_FURTHER_REBUTTAL"
+DEBATE_SIMILARITY_STOP = 0.75  # if a side's new rebuttal ~repeats its last, converge
 
 # ANSI colors
 GREEN   = "\033[92m"
@@ -213,49 +216,74 @@ def _render_transcript(transcript: list) -> str:
     return "\n\n".join(f"[{speaker}]: {text}" for speaker, text in transcript)
 
 
-def _debate_turn(role: str, state: AgentState, prior_debate: str, color: str) -> str:
+def _latest_of(transcript: list, speaker: str, fallback: str) -> str:
+    """Most recent statement by a speaker, or the fallback (their initial thesis)."""
+    items = [text for spk, text in transcript if spk == speaker]
+    return items[-1] if items else fallback
+
+
+def _own_points(transcript: list, speaker: str, initial: str) -> list:
+    """Everything this side has already argued (initial thesis + prior rebuttals)."""
+    return [initial] + [text for spk, text in transcript if spk == speaker]
+
+
+def _too_similar(a: str, b: str) -> bool:
+    return SequenceMatcher(None, a, b).ratio() >= DEBATE_SIMILARITY_STOP
+
+
+def _debate_turn(role: str, state: AgentState, opponent_claim: str,
+                 own_prior_points: list, color: str) -> str:
+    """
+    One rebuttal. Deliberately NOT given the full transcript dump — only the
+    single opponent argument to rebut and a list of its own prior points. This
+    keeps a weak model from absorbing/echoing the opponent's text (the cause of
+    the verbatim-copy bug), and the identity anchor is placed LAST for recency.
+    """
     ticker = state["ticker"]
-    own = state["bull_report"] if role == "bull" else state["bear_report"]
-    opp = state["bear_report"] if role == "bull" else state["bull_report"]
     opp_name = "bear" if role == "bull" else "bull"
     stance = "bullish" if role == "bull" else "bearish"
+    already = "\n".join(f"- {p}" for p in own_prior_points)
 
     system = {
         "role": "system",
         "content": (
-            f"You are the {role.title()} Analyst for {ticker}, defending a {stance} stance in a live debate. "
-            f"You can now SEE the opposing analyst's case. Directly rebut their STRONGEST point — quote it and "
-            f"explain why it is wrong, overstated, or already priced in, using specific numbers from the data "
-            f"already gathered. Do NOT repeat points already made in the debate. Stay in character: never concede "
-            f"your overall stance. Be sharp and brief (max 150 words). "
-            f"If you genuinely have no new rebuttal to add, reply with only: {NO_REBUTTAL}"
+            f"You are the {role.title()} Analyst for {ticker}. You hold a strictly {stance} stance and must "
+            f"NEVER switch sides or argue the {opp_name}'s position. Your only job is to REBUT the {opp_name}'s "
+            f"latest argument using specific numbers. Raise a NEW angle each time — never restate a point you "
+            f"have already made. Be sharp and brief (max 150 words). "
+            f"If you genuinely have no new rebuttal, reply with ONLY: {NO_REBUTTAL}"
         ),
     }
     user = {
         "role": "user",
         "content": (
             f"MARKET REGIME:\n{state.get('market_regime', 'N/A')}\n\n"
-            f"YOUR INITIAL THESIS:\n{own}\n\n"
-            f"OPPONENT ({opp_name}) INITIAL THESIS:\n{opp}\n\n"
-            f"DEBATE SO FAR:\n{prior_debate or '(none yet)'}\n\n"
-            f"Give your rebuttal now."
+            f"POINTS YOU HAVE ALREADY MADE (do NOT repeat any of these):\n{already}\n\n"
+            f"THE {opp_name.upper()}'S LATEST ARGUMENT — this is what you must rebut:\n\"\"\"\n{opponent_claim}\n\"\"\"\n\n"
+            f"You are the {role.upper()}. Stay {stance}. Write a NEW, specific rebuttal to the {opp_name}'s "
+            f"argument above — do not adopt their position. Begin your rebuttal:"
         ),
     }
     return _stream_response([system, user], f"{role.upper()} REBUTTAL", color, stop_on_tool_call=False)
 
 
 def debate_node(state: AgentState) -> dict:
-    """One debate round: bull rebuts, then bear counters (seeing the bull's fresh rebuttal)."""
+    """One debate round: bull rebuts the bear's latest point, then bear rebuts the bull's fresh one."""
     round_num = state.get("debate_round", 0) + 1
     print(f"\n{CYAN}{'═' * 50}{RESET}")
     print(f"{CYAN}{BOLD}  DEBATE — ROUND {round_num}{RESET}")
     print(f"{CYAN}{'═' * 50}{RESET}")
 
     transcript = state.get("debate_transcript", [])
-    bull_rebuttal = _debate_turn("bull", state, _render_transcript(transcript), GREEN)
 
-    with_bull = transcript + [("BULL", bull_rebuttal)]
-    bear_rebuttal = _debate_turn("bear", state, _render_transcript(with_bull), RED)
+    bear_latest = _latest_of(transcript, "BEAR", state["bear_report"])
+    bull_rebuttal = _debate_turn(
+        "bull", state, bear_latest, _own_points(transcript, "BULL", state["bull_report"]), GREEN
+    )
+
+    bear_rebuttal = _debate_turn(
+        "bear", state, bull_rebuttal, _own_points(transcript, "BEAR", state["bear_report"]), RED
+    )
 
     return {
         "debate_transcript": [("BULL", bull_rebuttal), ("BEAR", bear_rebuttal)],
@@ -265,12 +293,26 @@ def debate_node(state: AgentState) -> dict:
 
 def should_continue_debate(state: AgentState) -> str:
     """Conditional edge: loop the debate or hand off to the judge."""
+    transcript = state["debate_transcript"]
+
     if state.get("debate_round", 0) >= MAX_DEBATE_ROUNDS:
         return "judge"
-    # Early stop: if both sides had nothing new to add this round, end it.
-    last_round = state["debate_transcript"][-2:]
+
+    # Early stop: both sides explicitly out of new points this round.
+    last_round = transcript[-2:]
     if last_round and all(NO_REBUTTAL in text for _, text in last_round):
+        print(f"{CYAN}  [debate] both sides out of new points — ending.{RESET}")
         return "judge"
+
+    # Convergence: this round's rebuttals nearly repeat last round's -> stop
+    # rather than manufacture another stale exchange.
+    if len(transcript) >= 4:
+        prev_bull, prev_bear = transcript[-4][1], transcript[-3][1]
+        cur_bull, cur_bear = transcript[-2][1], transcript[-1][1]
+        if _too_similar(cur_bull, prev_bull) and _too_similar(cur_bear, prev_bear):
+            print(f"{CYAN}  [debate] arguments converging (repetitive) — ending.{RESET}")
+            return "judge"
+
     return "debate"
 
 
