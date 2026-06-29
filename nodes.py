@@ -25,22 +25,24 @@ TOOL_REGISTRY = {
     },
     "get_fundamentals": {
         "fn": get_fundamentals,
-        "desc": "Trailing/forward PE, profit margins, revenue growth, debt/equity, EPS, ROE.",
+        "desc": "SEC filing data: revenue, net income, cash flow, assets, equity, EPS, net margin, ROE, debt/assets.",
     },
     "get_recent_news": {
         "fn": get_recent_news,
-        "desc": "Recent headlines and summaries from trusted financial news outlets.",
+        "desc": "Recent company-specific news headlines and summaries from the last 7 days.",
     },
 }
 
 
-def _stream_response(messages: list, label: str, color: str) -> str:
+def _stream_response(messages: list, label: str, color: str, stop_on_tool_call: bool = True) -> str:
     """
     Stream from ollama, printing tokens in real time. Returns accumulated content.
 
-    Stops early once a complete CALL_TOOL line is emitted — otherwise the model
-    keeps generating and hallucinates the tool's result instead of waiting for
-    the real data we feed back on the next turn.
+    When stop_on_tool_call is True, cuts the stream the moment a complete
+    CALL_TOOL line is emitted — otherwise the model keeps generating and
+    hallucinates the tool's result instead of waiting for the real data we feed
+    back next turn. Set False for the final thesis pass, where we want the full
+    write-up and no tool calls are expected.
     """
     stream = ollama.chat(
         model=LOCAL_MODEL,
@@ -61,10 +63,15 @@ def _stream_response(messages: list, label: str, color: str) -> str:
             content += token
             # Once the tool name is fully written (followed by any non-word char),
             # cut the stream so the model can't fabricate the result.
-            if re.search(r"CALL_TOOL:\s*\w+\W", content):
+            if stop_on_tool_call and re.search(r"CALL_TOOL:\s*\w+\W", content):
                 break
     print()
     return content.strip()
+
+
+def _strip_tool_calls(text: str) -> str:
+    """Remove any stray CALL_TOOL lines so a thesis never ends as a tool stub."""
+    return re.sub(r"^.*CALL_TOOL:\s*\w+.*$", "", text, flags=re.MULTILINE).strip()
 
 
 def _parse_tool_call(text: str) -> str | None:
@@ -107,37 +114,40 @@ def _run_research_loop(ticker: str, role: str, color: str) -> str:
         {"role": "user", "content": f"Begin research on {ticker}. Pick your first tool."},
     ]
 
-    last_response = ""
-
-    for i in range(MAX_TOOL_CALLS + 1):
+    # Research phase: up to MAX_TOOL_CALLS tool calls. The moment the model
+    # stops calling tools and writes prose, that prose IS its thesis — return it.
+    for _ in range(MAX_TOOL_CALLS):
         response = _stream_response(messages, label, color)
         messages.append({"role": "assistant", "content": response})
-        last_response = response
-
-        if "ANALYSIS_COMPLETE" in response:
-            break
 
         tool_name = _parse_tool_call(response)
+        if not tool_name:
+            return _strip_tool_calls(response)
 
-        if tool_name and i < MAX_TOOL_CALLS:
-            print(f"{GRAY}  ↳ Calling: {BOLD}{tool_name}{RESET}")
-            result = TOOL_REGISTRY[tool_name]["fn"](ticker)
-            print(f"{GRAY}{result}{RESET}")
-            print(f"{GRAY}{'─' * 40}{RESET}")
-            messages.append({
-                "role": "user",
-                "content": (
-                    f"TOOL RESULT ({tool_name}):\n{result}\n\n"
-                    f"Call another tool or write your final thesis ending with ANALYSIS_COMPLETE."
-                ),
-            })
-        else:
-            messages.append({
-                "role": "user",
-                "content": "Write your final thesis now and end with ANALYSIS_COMPLETE.",
-            })
+        print(f"{GRAY}  ↳ Calling: {BOLD}{tool_name}{RESET}")
+        result = TOOL_REGISTRY[tool_name]["fn"](ticker)
+        print(f"{GRAY}{result}{RESET}")
+        print(f"{GRAY}{'─' * 40}{RESET}")
+        messages.append({
+            "role": "user",
+            "content": (
+                f"TOOL RESULT ({tool_name}):\n{result}\n\n"
+                f"Call another tool or write your final thesis ending with ANALYSIS_COMPLETE."
+            ),
+        })
 
-    return last_response
+    # Tool budget exhausted — force a final thesis pass with tools disabled so
+    # the analyst always produces a real write-up, never ends on a tool stub.
+    messages.append({
+        "role": "user",
+        "content": (
+            "You have gathered enough data. Do NOT call any more tools. "
+            "Write your final bullet-point thesis now (max 250 words) and end "
+            "with ANALYSIS_COMPLETE."
+        ),
+    })
+    final = _stream_response(messages, label, color, stop_on_tool_call=False)
+    return _strip_tool_calls(final)
 
 
 def bull_node(state: AgentState) -> dict:

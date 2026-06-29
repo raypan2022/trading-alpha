@@ -7,3 +7,8 @@ venv/
 dist/
 build/
 .DS_Store
+.cache/
+
+# Agent-facing memory/notes — not project docs
+CLAUDE.md
+ROADMAP.md
