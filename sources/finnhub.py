@@ -68,14 +68,17 @@ def _get_company_name(ticker: str, api_key: str) -> str:
     return name
 
 
-def get_finnhub_news(ticker: str, days: int = 7, max_articles: int = 5) -> str:
+def get_finnhub_news(ticker: str, days: int = 7, max_articles: int = 5,
+                     as_of: str | None = None) -> str:
     api_key = os.getenv("FINNHUB_API_KEY")
     if not api_key:
         return "ERROR: FINNHUB_API_KEY not set. Add a free key from finnhub.io to .env."
 
     try:
         company_name = _get_company_name(ticker, api_key)
-        to_date = date.today()
+        # as_of (ISO date): for backtesting, end the news window at that date so
+        # the agent never sees headlines that hadn't been published yet.
+        to_date = date.fromisoformat(as_of) if as_of else date.today()
         from_date = to_date - timedelta(days=days)
         resp = requests.get(
             f"{FINNHUB_BASE}/company-news",

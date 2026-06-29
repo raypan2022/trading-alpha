@@ -15,6 +15,7 @@ class TradingVerdict(BaseModel):
 
 class AgentState(TypedDict):
     ticker: str
+    as_of: Optional[str]          # ISO date for backtesting; None = live data
     bull_report: str
     bear_report: str
     final_verdict: Optional[TradingVerdict]

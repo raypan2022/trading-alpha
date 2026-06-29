@@ -95,3 +95,14 @@ python -m evals.score_eval            # scores any matured verdicts
 ```
 
 Scoring uses forward price data only (no lookahead), so results accumulate honestly over time. Logged verdicts live in `evals/results.jsonl` (gitignored — it's a local, append-only run log).
+
+**Point-in-time backtest** — for fast iteration without the 30-day wait, the agent can be run "as of" a past date and scored immediately against the realized move. Every data source is restricted to what was knowable on that date: historical price + trailing 52-week range, SEC filings made by then, and news up to then.
+
+```bash
+python -m evals.backtest                   # default case set
+python -m evals.backtest AAPL 2026-04-15   # single ad-hoc case
+```
+
+Two lookahead traps it avoids:
+- **Data leakage** — an `as_of` date is threaded through every tool, so the agent never sees a price, filing, or headline from after the decision date.
+- **Model-memory leakage** — the *local model* may already "remember" a stock's move if the date predates its training cutoff. Backtest dates must be **after the local model's knowledge cutoff** (and ≥30 days before today so the outcome exists). Set them in `DEFAULT_CASES`.

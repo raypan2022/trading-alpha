@@ -82,7 +82,7 @@ def _parse_tool_call(text: str) -> str | None:
     return None
 
 
-def _run_research_loop(ticker: str, role: str, color: str) -> str:
+def _run_research_loop(ticker: str, role: str, color: str, as_of: str | None = None) -> str:
     label = f"{role.upper()} ANALYST"
     tool_menu = "\n".join(
         f"  - {name}: {info['desc']}" for name, info in TOOL_REGISTRY.items()
@@ -125,7 +125,7 @@ def _run_research_loop(ticker: str, role: str, color: str) -> str:
             return _strip_tool_calls(response)
 
         print(f"{GRAY}  ↳ Calling: {BOLD}{tool_name}{RESET}")
-        result = TOOL_REGISTRY[tool_name]["fn"](ticker)
+        result = TOOL_REGISTRY[tool_name]["fn"](ticker, as_of)
         print(f"{GRAY}{result}{RESET}")
         print(f"{GRAY}{'─' * 40}{RESET}")
         messages.append({
@@ -154,7 +154,7 @@ def bull_node(state: AgentState) -> dict:
     print(f"\n{GREEN}{'═' * 50}{RESET}")
     print(f"{GREEN}{BOLD}  BULL ANALYST — {state['ticker']}{RESET}")
     print(f"{GREEN}{'═' * 50}{RESET}")
-    report = _run_research_loop(state["ticker"], "bull", GREEN)
+    report = _run_research_loop(state["ticker"], "bull", GREEN, as_of=state.get("as_of"))
     return {"bull_report": report}
 
 
@@ -162,7 +162,7 @@ def bear_node(state: AgentState) -> dict:
     print(f"\n{RED}{'═' * 50}{RESET}")
     print(f"{RED}{BOLD}  BEAR ANALYST — {state['ticker']}{RESET}")
     print(f"{RED}{'═' * 50}{RESET}")
-    report = _run_research_loop(state["ticker"], "bear", RED)
+    report = _run_research_loop(state["ticker"], "bear", RED, as_of=state.get("as_of"))
     return {"bear_report": report}
 
 

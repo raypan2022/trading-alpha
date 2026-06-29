@@ -81,24 +81,32 @@ def _fetch_facts(cik: str) -> dict:
     return facts
 
 
-def _latest_fact(usgaap: dict, candidates: list, prefer_annual: bool) -> dict | None:
+def _latest_fact(usgaap: dict, candidates: list, prefer_annual: bool,
+                 as_of: str | None = None) -> dict | None:
     """
     Extract the most recent value for the first matching concept.
 
     prefer_annual: for flow metrics (revenue, net income, cash flow) we want
     full-year figures, so prefer 10-K entries; fall back to whatever exists.
     Balance-sheet items are point-in-time, so we just take the latest end date.
+
+    as_of (ISO date): for backtesting — only consider facts FILED on or before
+    this date, so the agent never sees a filing that didn't exist yet. Each XBRL
+    data point carries a "filed" date; ISO strings compare correctly as text.
     """
     for concept in candidates:
         node = usgaap.get(concept)
         if not node:
             continue
         for points in node.get("units", {}).values():
-            if not points:
+            pts = points
+            if as_of:
+                pts = [p for p in pts if p.get("filed", "") <= as_of]
+            if not pts:
                 continue
-            pool = points
+            pool = pts
             if prefer_annual:
-                annual = [p for p in points if p.get("form") == "10-K"]
+                annual = [p for p in pts if p.get("form") == "10-K"]
                 if annual:
                     pool = annual
             best = max(pool, key=lambda p: p.get("end", ""))
@@ -131,8 +139,11 @@ def _human(n) -> str:
     return f"{sign}${a:,.0f}"
 
 
-def get_sec_fundamentals(ticker: str) -> str:
-    """Public tool: return filtered, derived fundamentals from SEC filings."""
+def get_sec_fundamentals(ticker: str, as_of: str | None = None) -> str:
+    """Public tool: return filtered, derived fundamentals from SEC filings.
+
+    as_of (ISO date): only use filings made on or before this date (backtesting).
+    """
     try:
         cik = _get_cik(ticker)
         if not cik:
@@ -145,11 +156,11 @@ def get_sec_fundamentals(ticker: str) -> str:
 
         extracted = {}
         for label, candidates in FLOW_CONCEPTS.items():
-            extracted[label] = _latest_fact(usgaap, candidates, prefer_annual=True)
+            extracted[label] = _latest_fact(usgaap, candidates, prefer_annual=True, as_of=as_of)
         for label, candidates in BALANCE_CONCEPTS.items():
-            extracted[label] = _latest_fact(usgaap, candidates, prefer_annual=False)
+            extracted[label] = _latest_fact(usgaap, candidates, prefer_annual=False, as_of=as_of)
         for label, candidates in PERSHARE_CONCEPTS.items():
-            extracted[label] = _latest_fact(usgaap, candidates, prefer_annual=True)
+            extracted[label] = _latest_fact(usgaap, candidates, prefer_annual=True, as_of=as_of)
 
         lines = [f"SEC EDGAR Fundamentals — {ticker.upper()} (CIK {cik})"]
 
@@ -192,14 +203,14 @@ def get_sec_fundamentals(ticker: str) -> str:
         return f"ERROR: SEC fundamentals parsing failed ({e})."
 
 
-def get_diluted_eps(ticker: str) -> float | None:
+def get_diluted_eps(ticker: str, as_of: str | None = None) -> float | None:
     """Return latest diluted EPS as a float (for computing P/E), or None."""
     try:
         cik = _get_cik(ticker)
         if not cik:
             return None
         usgaap = _fetch_facts(cik).get("facts", {}).get("us-gaap", {})
-        fact = _latest_fact(usgaap, PERSHARE_CONCEPTS["EPS (Diluted)"], prefer_annual=True)
+        fact = _latest_fact(usgaap, PERSHARE_CONCEPTS["EPS (Diluted)"], prefer_annual=True, as_of=as_of)
         if fact and fact["value"] is not None:
             return float(fact["value"])
     except (requests.RequestException, ValueError, TypeError):

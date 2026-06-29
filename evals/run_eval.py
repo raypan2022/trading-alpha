@@ -77,6 +77,7 @@ def main():
         try:
             result = app.invoke({
                 "ticker": ticker,
+                "as_of": None,
                 "bull_report": "",
                 "bear_report": "",
                 "final_verdict": None,
