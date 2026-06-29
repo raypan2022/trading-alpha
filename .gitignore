@@ -9,6 +9,9 @@ build/
 .DS_Store
 .cache/
 
+# Eval run log (machine-generated, append-only) — the harness code is tracked, the log isn't
+evals/results.jsonl
+
 # Agent-facing memory/notes — not project docs
 CLAUDE.md
 ROADMAP.md

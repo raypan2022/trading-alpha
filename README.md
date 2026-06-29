@@ -94,4 +94,4 @@ python -m evals.run_eval AAPL RDDT    # ad-hoc subset
 python -m evals.score_eval            # scores any matured verdicts
 ```
 
-Scoring uses forward price data only (no lookahead), so results accumulate honestly over time. Logged verdicts live in `evals/results.jsonl`.
+Scoring uses forward price data only (no lookahead), so results accumulate honestly over time. Logged verdicts live in `evals/results.jsonl` (gitignored — it's a local, append-only run log).
