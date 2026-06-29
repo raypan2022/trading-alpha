@@ -78,6 +78,7 @@ def main():
             result = app.invoke({
                 "ticker": ticker,
                 "as_of": None,
+                "market_regime": "",
                 "bull_report": "",
                 "bear_report": "",
                 "final_verdict": None,

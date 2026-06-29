@@ -16,6 +16,7 @@ class TradingVerdict(BaseModel):
 class AgentState(TypedDict):
     ticker: str
     as_of: Optional[str]          # ISO date for backtesting; None = live data
+    market_regime: str            # shared macro context, set by the macro node
     bull_report: str
     bear_report: str
     final_verdict: Optional[TradingVerdict]

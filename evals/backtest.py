@@ -69,6 +69,7 @@ def _run_case(app, ticker: str, as_of: str):
     result = app.invoke({
         "ticker": ticker,
         "as_of": as_of,
+        "market_regime": "",
         "bull_report": "",
         "bear_report": "",
         "final_verdict": None,

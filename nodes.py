@@ -5,18 +5,20 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 from state import AgentState, TradingVerdict
 from tools import get_price_snapshot, get_fundamentals, get_recent_news
+from sources.market import get_market_regime
 
 LOCAL_MODEL = "qwen3.5:9b"
 CLOUD_MODEL = "gpt-5.4-mini"
 MAX_TOOL_CALLS = 3
 
 # ANSI colors
-GREEN = "\033[92m"
-RED   = "\033[91m"
-CYAN  = "\033[96m"
-GRAY  = "\033[90m"
-BOLD  = "\033[1m"
-RESET = "\033[0m"
+GREEN   = "\033[92m"
+RED     = "\033[91m"
+CYAN    = "\033[96m"
+MAGENTA = "\033[95m"
+GRAY    = "\033[90m"
+BOLD    = "\033[1m"
+RESET   = "\033[0m"
 
 TOOL_REGISTRY = {
     "get_price_snapshot": {
@@ -82,7 +84,8 @@ def _parse_tool_call(text: str) -> str | None:
     return None
 
 
-def _run_research_loop(ticker: str, role: str, color: str, as_of: str | None = None) -> str:
+def _run_research_loop(ticker: str, role: str, color: str, as_of: str | None = None,
+                       market_regime: str = "") -> str:
     label = f"{role.upper()} ANALYST"
     tool_menu = "\n".join(
         f"  - {name}: {info['desc']}" for name, info in TOOL_REGISTRY.items()
@@ -95,11 +98,21 @@ def _run_research_loop(ticker: str, role: str, color: str, as_of: str | None = N
         mandate = "find the strongest bearish signals: overvaluation, margin compression, debt burden, negative news"
         constraint = "Do NOT acknowledge bull positives."
 
+    regime_block = ""
+    if market_regime:
+        regime_block = (
+            f"SHARED MARKET CONTEXT (top-down macro read all analysts share):\n"
+            f"{market_regime}\n\n"
+            f"Factor this regime into your thesis — e.g. a risk-off regime raises the bar "
+            f"for a BUY, a risk-on regime cuts slack to bearish caution.\n\n"
+        )
+
     system = {
         "role": "system",
         "content": (
             f"You are an isolated {role.title()} Research Analyst for {ticker}.\n"
             f"Mandate: {mandate}.\n\n"
+            f"{regime_block}"
             f"Available tools:\n{tool_menu}\n\n"
             f"TOOL CALL FORMAT — output this exact pattern on its own line to call a tool:\n"
             f"CALL_TOOL: <tool_name>\n\n"
@@ -150,11 +163,37 @@ def _run_research_loop(ticker: str, role: str, color: str, as_of: str | None = N
     return _strip_tool_calls(final)
 
 
+def macro_node(state: AgentState) -> dict:
+    """Top-down macro context, computed once and shared with both analysts and the judge."""
+    print(f"\n{MAGENTA}{'═' * 50}{RESET}")
+    print(f"{MAGENTA}{BOLD}  MACRO STRATEGIST — market regime{RESET}")
+    print(f"{MAGENTA}{'═' * 50}{RESET}")
+
+    regime = get_market_regime(as_of=state.get("as_of"))
+    print(f"{GRAY}{regime}{RESET}")
+    print(f"{GRAY}{'─' * 40}{RESET}")
+
+    messages = [
+        {"role": "system", "content": (
+            "You are a macro market strategist. Given the regime signals below, in 3-4 "
+            "sentences give a decisive read: what regime are we in, and what does it mean "
+            "for taking risk in individual equities right now? Do NOT discuss any specific "
+            "stock — this is top-down context only."
+        )},
+        {"role": "user", "content": regime},
+    ]
+    assessment = _stream_response(messages, "MACRO STRATEGIST", MAGENTA, stop_on_tool_call=False)
+
+    return {"market_regime": f"{regime}\n\nMACRO STRATEGIST READ:\n{assessment}"}
+
+
 def bull_node(state: AgentState) -> dict:
     print(f"\n{GREEN}{'═' * 50}{RESET}")
     print(f"{GREEN}{BOLD}  BULL ANALYST — {state['ticker']}{RESET}")
     print(f"{GREEN}{'═' * 50}{RESET}")
-    report = _run_research_loop(state["ticker"], "bull", GREEN, as_of=state.get("as_of"))
+    report = _run_research_loop(state["ticker"], "bull", GREEN,
+                                as_of=state.get("as_of"),
+                                market_regime=state.get("market_regime", ""))
     return {"bull_report": report}
 
 
@@ -162,7 +201,9 @@ def bear_node(state: AgentState) -> dict:
     print(f"\n{RED}{'═' * 50}{RESET}")
     print(f"{RED}{BOLD}  BEAR ANALYST — {state['ticker']}{RESET}")
     print(f"{RED}{'═' * 50}{RESET}")
-    report = _run_research_loop(state["ticker"], "bear", RED, as_of=state.get("as_of"))
+    report = _run_research_loop(state["ticker"], "bear", RED,
+                                as_of=state.get("as_of"),
+                                market_regime=state.get("market_regime", ""))
     return {"bear_report": report}
 
 
@@ -183,9 +224,11 @@ def judge_node(state: AgentState) -> dict:
         )),
         HumanMessage(content=(
             f"ASSET: {state['ticker']}\n\n"
+            f"{'='*40}\nMARKET REGIME (shared macro context):\n{'='*40}\n{state.get('market_regime', 'N/A')}\n\n"
             f"{'='*40}\nBULL DISPATCH:\n{'='*40}\n{state['bull_report']}\n\n"
             f"{'='*40}\nBEAR DISPATCH:\n{'='*40}\n{state['bear_report']}\n\n"
-            f"Arbitrate and return your structured verdict."
+            f"Arbitrate and return your structured verdict, weighing the single-name case "
+            f"against the prevailing market regime."
         )),
     ]
 

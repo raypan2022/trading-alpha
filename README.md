@@ -7,11 +7,18 @@ A hybrid multi-agent financial forecasting system. Two isolated local LLM agents
 ```
 [User Input: Ticker]
         │
-┌───────┴───────┐
-▼               ▼
-Bull Analyst   Bear Analyst
-(Qwen 3.5 4B)  (Qwen 3.5 4B)
-└───────┬───────┘
+        ▼
+ Macro Strategist        ─┐
+ (Qwen 3.5 9B)            │ produces the market-regime read
+        │                 │ shared as context with everyone below
+        ▼                 │
+   Bull Analyst  ─────────┤
+   (Qwen 3.5 9B)          │
+        │                 │
+        ▼                 │
+   Bear Analyst  ─────────┘
+   (Qwen 3.5 9B)
+        │
         ▼
  Portfolio Manager
    (Cloud Judge)
@@ -21,17 +28,19 @@ Bull Analyst   Bear Analyst
  BUY / HOLD / SELL
 ```
 
-Bull and Bear agents run in parallel with zero-knowledge isolation — they never see each other's reasoning, only the same raw market data. The cloud judge cross-examines both dispatches and returns a validated `TradingVerdict`.
+A **Macro Strategist** runs first and produces a top-down market-regime read (trend, volatility, rates) that is shared as context with both analysts and the judge — so the single-name debate happens *inside* a known macro backdrop. The **Bull** and **Bear** analysts then research the ticker in zero-knowledge isolation (they never see each other's reasoning), each autonomously choosing which data tools to call. The **cloud judge** cross-examines both dispatches against the regime and returns a validated `TradingVerdict`.
+
+The committee runs sequentially (macro → bull → bear → judge) to keep streamed output readable; parallelizing the analysts is a planned upgrade.
 
 ## Setup
 
 **Requirements**
 - Python 3.11+
-- [Ollama](https://ollama.com) running locally with `qwen3.5:4b` pulled
+- [Ollama](https://ollama.com) running locally with `qwen3.5:9b` pulled
 - OpenAI API key (for the cloud judge)
 
 ```bash
-ollama pull qwen3.5:4b
+ollama pull qwen3.5:9b
 pip install langgraph langchain-openai langchain-ollama langchain-core yfinance pydantic python-dotenv
 ```
 
@@ -70,6 +79,8 @@ Each agent autonomously decides which tools to call (up to a bounded budget) bef
 | `get_price_snapshot` | yfinance | Current price, 52-week range, market cap, beta, and P/E computed from SEC EPS |
 | `get_fundamentals` | SEC EDGAR | Authoritative XBRL filing data: revenue, net income, cash flow, assets, equity, EPS, plus derived net margin / ROE / debt-to-assets |
 | `get_recent_news` | Finnhub | Symbol-scoped recent headlines, headline-relevance filtered and deduplicated |
+
+The Macro Strategist additionally reads a **market-regime** signal (`sources/market.py`) — S&P 500 / Nasdaq trend vs moving averages, VIX level, and 10Y yield direction, all from yfinance index history. Unlike the three tools above, this isn't agent-selected: it's computed once and injected as shared context for everyone.
 
 Cold data (SEC filings) is cached to disk with a 24h TTL; the ticker→CIK map and company names are cached longer. Fundamentals are filtered to core statement lines before reaching the model — the raw XBRL blob is never injected.
 
