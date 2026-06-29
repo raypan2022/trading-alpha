@@ -41,17 +41,27 @@ def get_price_snapshot(ticker: str) -> str:
         return f"ERROR: {e}"
 
 
+def _pct(value) -> str:
+    """Render a decimal ratio (0.286) as a percentage string (28.6%)."""
+    if value is None or value == "N/A":
+        return "N/A"
+    try:
+        return f"{float(value) * 100:.1f}%"
+    except (TypeError, ValueError):
+        return "N/A"
+
+
 def get_fundamentals(ticker: str) -> str:
     try:
         info = yf.Ticker(ticker).info
         return (
             f"Trailing PE:    {info.get('trailingPE', 'N/A')}\n"
             f"Forward PE:     {info.get('forwardPE', 'N/A')}\n"
-            f"Profit Margins: {info.get('profitMargins', 'N/A')}\n"
-            f"Revenue Growth: {info.get('revenueGrowth', 'N/A')}\n"
+            f"Profit Margins: {_pct(info.get('profitMargins'))}\n"
+            f"Revenue Growth: {_pct(info.get('revenueGrowth'))}\n"
             f"Debt/Equity:    {info.get('debtToEquity', 'N/A')}\n"
             f"EPS (TTM):      {info.get('trailingEps', 'N/A')}\n"
-            f"Return on Eq:   {info.get('returnOnEquity', 'N/A')}"
+            f"Return on Eq:   {_pct(info.get('returnOnEquity'))}"
         )
     except Exception as e:
         return f"ERROR: {e}"

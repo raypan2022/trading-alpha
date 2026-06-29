@@ -6,7 +6,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from state import AgentState, TradingVerdict
 from tools import get_price_snapshot, get_fundamentals, get_recent_news
 
-LOCAL_MODEL = "qwen3.5:4b"
+LOCAL_MODEL = "qwen3.5:9b"
 CLOUD_MODEL = "gpt-5.4-mini"
 MAX_TOOL_CALLS = 3
 
@@ -35,7 +35,13 @@ TOOL_REGISTRY = {
 
 
 def _stream_response(messages: list, label: str, color: str) -> str:
-    """Stream from ollama, printing tokens in real time. Returns accumulated content."""
+    """
+    Stream from ollama, printing tokens in real time. Returns accumulated content.
+
+    Stops early once a complete CALL_TOOL line is emitted — otherwise the model
+    keeps generating and hallucinates the tool's result instead of waiting for
+    the real data we feed back on the next turn.
+    """
     stream = ollama.chat(
         model=LOCAL_MODEL,
         messages=messages,
@@ -53,6 +59,10 @@ def _stream_response(messages: list, label: str, color: str) -> str:
         if token:
             print(token, end="", flush=True)
             content += token
+            # Once the tool name is fully written (followed by any non-word char),
+            # cut the stream so the model can't fabricate the result.
+            if re.search(r"CALL_TOOL:\s*\w+\W", content):
+                break
     print()
     return content.strip()
 
