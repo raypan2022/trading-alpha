@@ -8,16 +8,21 @@ A hybrid multi-agent financial forecasting system. Two isolated local LLM agents
 [User Input: Ticker]
         │
         ▼
- Macro Strategist        ─┐
- (Qwen 3.5 9B)            │ produces the market-regime read
-        │                 │ shared as context with everyone below
-        ▼                 │
-   Bull Analyst  ─────────┤
-   (Qwen 3.5 9B)          │
+ Macro Strategist        ─┐ produces the market-regime read,
+ (Qwen 3.5 9B)            │ shared as context with everyone below
         │                 │
         ▼                 │
-   Bear Analyst  ─────────┘
+   Bull Research  ────────┤  ← isolated: each forms an initial
+   (Qwen 3.5 9B)          │    thesis without seeing the other
+        │                 │
+        ▼                 │
+   Bear Research  ────────┘
    (Qwen 3.5 9B)
+        │
+        ▼
+   ┌─► Debate Round ◄─┐      ← bull & bear now SEE each other
+   │  (bull rebuts,   │        and rebut, looping until a round
+   └── bear counters)─┘        cap or both run out of points
         │
         ▼
  Portfolio Manager
@@ -28,9 +33,11 @@ A hybrid multi-agent financial forecasting system. Two isolated local LLM agents
  BUY / HOLD / SELL
 ```
 
-A **Macro Strategist** runs first and produces a top-down market-regime read (trend, volatility, rates) that is shared as context with both analysts and the judge — so the single-name debate happens *inside* a known macro backdrop. The **Bull** and **Bear** analysts then research the ticker in zero-knowledge isolation (they never see each other's reasoning), each autonomously choosing which data tools to call. The **cloud judge** cross-examines both dispatches against the regime and returns a validated `TradingVerdict`.
+A **Macro Strategist** runs first and produces a top-down market-regime read (trend, volatility, rates), shared as context with both analysts and the judge — so the single-name analysis happens *inside* a known macro backdrop.
 
-The committee runs sequentially (macro → bull → bear → judge) to keep streamed output readable; parallelizing the analysts is a planned upgrade.
+The **Bull** and **Bear** analysts then run in two phases. First, **isolated research**: each gathers data (autonomously choosing tools) and forms an initial thesis without seeing the other — preserving orthogonal viewpoints. Then a **multi-round debate**: they finally see each other's case and rebut directly, looping via a conditional graph edge until a round cap or both sides have nothing new. This cycle is what makes it a real agent system rather than a one-shot pipeline.
+
+The **cloud judge** then weighs which points survived rebuttal — against the macro regime — and returns a validated `TradingVerdict`. The committee runs sequentially to keep streamed output readable; parallelizing the research phase is a planned upgrade.
 
 ## Setup
 

@@ -42,6 +42,8 @@ def main():
         "market_regime": "",
         "bull_report": "",
         "bear_report": "",
+        "debate_transcript": [],
+        "debate_round": 0,
         "final_verdict": None,
     })
 

@@ -10,6 +10,8 @@ from sources.market import get_market_regime
 LOCAL_MODEL = "qwen3.5:9b"
 CLOUD_MODEL = "gpt-5.4-mini"
 MAX_TOOL_CALLS = 3
+MAX_DEBATE_ROUNDS = 2          # hard cap on bull<->bear rebuttal rounds
+NO_REBUTTAL = "NO_FURTHER_REBUTTAL"
 
 # ANSI colors
 GREEN   = "\033[92m"
@@ -207,6 +209,71 @@ def bear_node(state: AgentState) -> dict:
     return {"bear_report": report}
 
 
+def _render_transcript(transcript: list) -> str:
+    return "\n\n".join(f"[{speaker}]: {text}" for speaker, text in transcript)
+
+
+def _debate_turn(role: str, state: AgentState, prior_debate: str, color: str) -> str:
+    ticker = state["ticker"]
+    own = state["bull_report"] if role == "bull" else state["bear_report"]
+    opp = state["bear_report"] if role == "bull" else state["bull_report"]
+    opp_name = "bear" if role == "bull" else "bull"
+    stance = "bullish" if role == "bull" else "bearish"
+
+    system = {
+        "role": "system",
+        "content": (
+            f"You are the {role.title()} Analyst for {ticker}, defending a {stance} stance in a live debate. "
+            f"You can now SEE the opposing analyst's case. Directly rebut their STRONGEST point — quote it and "
+            f"explain why it is wrong, overstated, or already priced in, using specific numbers from the data "
+            f"already gathered. Do NOT repeat points already made in the debate. Stay in character: never concede "
+            f"your overall stance. Be sharp and brief (max 150 words). "
+            f"If you genuinely have no new rebuttal to add, reply with only: {NO_REBUTTAL}"
+        ),
+    }
+    user = {
+        "role": "user",
+        "content": (
+            f"MARKET REGIME:\n{state.get('market_regime', 'N/A')}\n\n"
+            f"YOUR INITIAL THESIS:\n{own}\n\n"
+            f"OPPONENT ({opp_name}) INITIAL THESIS:\n{opp}\n\n"
+            f"DEBATE SO FAR:\n{prior_debate or '(none yet)'}\n\n"
+            f"Give your rebuttal now."
+        ),
+    }
+    return _stream_response([system, user], f"{role.upper()} REBUTTAL", color, stop_on_tool_call=False)
+
+
+def debate_node(state: AgentState) -> dict:
+    """One debate round: bull rebuts, then bear counters (seeing the bull's fresh rebuttal)."""
+    round_num = state.get("debate_round", 0) + 1
+    print(f"\n{CYAN}{'═' * 50}{RESET}")
+    print(f"{CYAN}{BOLD}  DEBATE — ROUND {round_num}{RESET}")
+    print(f"{CYAN}{'═' * 50}{RESET}")
+
+    transcript = state.get("debate_transcript", [])
+    bull_rebuttal = _debate_turn("bull", state, _render_transcript(transcript), GREEN)
+
+    with_bull = transcript + [("BULL", bull_rebuttal)]
+    bear_rebuttal = _debate_turn("bear", state, _render_transcript(with_bull), RED)
+
+    return {
+        "debate_transcript": [("BULL", bull_rebuttal), ("BEAR", bear_rebuttal)],
+        "debate_round": round_num,
+    }
+
+
+def should_continue_debate(state: AgentState) -> str:
+    """Conditional edge: loop the debate or hand off to the judge."""
+    if state.get("debate_round", 0) >= MAX_DEBATE_ROUNDS:
+        return "judge"
+    # Early stop: if both sides had nothing new to add this round, end it.
+    last_round = state["debate_transcript"][-2:]
+    if last_round and all(NO_REBUTTAL in text for _, text in last_round):
+        return "judge"
+    return "debate"
+
+
 def judge_node(state: AgentState) -> dict:
     print(f"\n{CYAN}{'═' * 50}{RESET}")
     print(f"{CYAN}{BOLD}  PORTFOLIO MANAGER ARBITRATING...{RESET}")
@@ -225,10 +292,12 @@ def judge_node(state: AgentState) -> dict:
         HumanMessage(content=(
             f"ASSET: {state['ticker']}\n\n"
             f"{'='*40}\nMARKET REGIME (shared macro context):\n{'='*40}\n{state.get('market_regime', 'N/A')}\n\n"
-            f"{'='*40}\nBULL DISPATCH:\n{'='*40}\n{state['bull_report']}\n\n"
-            f"{'='*40}\nBEAR DISPATCH:\n{'='*40}\n{state['bear_report']}\n\n"
-            f"Arbitrate and return your structured verdict, weighing the single-name case "
-            f"against the prevailing market regime."
+            f"{'='*40}\nBULL DISPATCH (initial thesis):\n{'='*40}\n{state['bull_report']}\n\n"
+            f"{'='*40}\nBEAR DISPATCH (initial thesis):\n{'='*40}\n{state['bear_report']}\n\n"
+            f"{'='*40}\nDEBATE (rebuttals, in order):\n{'='*40}\n{_render_transcript(state.get('debate_transcript', [])) or '(no debate)'}\n\n"
+            f"Weigh the single-name case against the market regime. Pay attention to which points "
+            f"survived rebuttal in the debate and which were successfully knocked down. "
+            f"Arbitrate and return your structured verdict."
         )),
     ]
 

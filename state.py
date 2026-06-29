@@ -1,4 +1,5 @@
-from typing import Optional
+import operator
+from typing import Optional, Annotated
 from typing_extensions import TypedDict
 from pydantic import BaseModel, Field
 
@@ -17,6 +18,10 @@ class AgentState(TypedDict):
     ticker: str
     as_of: Optional[str]          # ISO date for backtesting; None = live data
     market_regime: str            # shared macro context, set by the macro node
-    bull_report: str
-    bear_report: str
+    bull_report: str              # bull's initial (isolated) research thesis
+    bear_report: str              # bear's initial (isolated) research thesis
+    # Debate rebuttals accumulate across rounds via the add reducer — each
+    # debate node returns its new turns and they append rather than overwrite.
+    debate_transcript: Annotated[list, operator.add]
+    debate_round: int
     final_verdict: Optional[TradingVerdict]
